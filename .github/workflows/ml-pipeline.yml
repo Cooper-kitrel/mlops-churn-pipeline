@@ -1,0 +1,74 @@
+name: ML Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  MLFLOW_DISABLE_AGENT_HINT: "1"
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # The DVC remote is local to the developer's machine, so CI fetches the
+      # same public source file instead.
+      - name: Get dataset
+        run: python -m src.data --download
+
+      - name: Run pytest
+        run: pytest tests/ -v
+
+  train:
+    name: Train and validate model
+    runs-on: ubuntu-latest
+    needs: test            # only runs if the test job passes
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Get dataset
+        run: python -m src.data --download
+
+      # train.py exits with code 1 if any threshold in configs/config.yaml is
+      # missed, which fails this step and the pipeline.
+      - name: Train model and enforce thresholds
+        run: python -m src.train --config configs/config.yaml --run-name ci-${{ github.run_number }}
+
+      - name: Upload model and metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-and-metrics
+          path: |
+            models/model.joblib
+            reports/metrics.json
