@@ -91,39 +91,47 @@ python -m src.data --download
 python -m src.train --config configs/config.yaml
 ```
 
-The script reads every setting from `configs/config.yaml`. Each run logs to MLflow:
+The script reads every setting from `configs/config.yaml`. It splits the data three ways (train / validation / test), trains on the **train** split, and scores the model on the **validation** split. **The test split is never used during training or model selection.** Each run logs to MLflow:
 - all hyperparameters and preprocessing settings
 - the data version (the DVC md5 hash, e.g. `dvc:3b0bfab2...`)
-- five metrics: ROC-AUC (primary), F1, precision, recall, accuracy
+- five validation metrics: `val_roc_auc` (primary), `val_f1`, `val_precision`, `val_recall`, `val_accuracy`
 - the full preprocessing + model pipeline via `mlflow.sklearn.log_model()`
 
-**It exits with code 1 if any threshold in `config.yaml → thresholds` is not met** (ROC-AUC ≥ 0.80, F1 ≥ 0.55, recall ≥ 0.50). CI uses this exit code as a quality gate.
+**It exits with code 1 if any validation metric misses its threshold in `config.yaml → thresholds`** (ROC-AUC ≥ 0.80, F1 ≥ 0.55, recall ≥ 0.50). CI uses this exit code as a quality gate.
 
 > **Note (MLflow 3):** logged models appear under the experiment's **Models** tab (and the run's *Logged models* section) rather than the run's Artifacts tab. They can still be loaded with `mlflow.sklearn.load_model("runs:/<run_id>/model")`.
 
 ## Experiments
 
 ```bash
-python -m src.run_experiments        # runs the 5 configurations in configs/experiments.yaml
-python -m src.compare_experiments    # queries MLflow with search_runs(), prints the best run
+python -m src.run_experiments        # trains the 5 configurations in configs/experiments.yaml and scores them on the validation set
+python -m src.compare_experiments    # selects the best run by validation ROC-AUC, then evaluates it on the test set
 mlflow ui --backend-store-uri sqlite:///mlflow.db   # http://127.0.0.1:5000 ("Model training" view)
 ```
 
-| Run | What varies | ROC-AUC | F1 | Recall |
-|---|---|---|---|---|
-| random_forest_200 | Model type | **0.8419** | 0.6298 | 0.7914 |
-| logreg_baseline | Baseline | 0.8413 | 0.6136 | 0.7834 |
-| gradient_boosting_lr005 | Model type | 0.8404 | 0.5710 | 0.5107 |
-| logreg_strong_regularization | Hyperparameter (C = 0.05) | 0.8402 | 0.6183 | 0.7861 |
-| logreg_reduced_features | Feature set (9 of 15 categorical) | 0.8397 | 0.6160 | 0.7914 |
+**Model selection on the validation set.** The data is split three ways: 64% train (4,507 rows), 16% validation (1,127), and 20% test (1,409). Each configuration is trained on the train set and scored on the validation set:
 
-**Best run:** `random_forest_200` (ROC-AUC 0.8419). All five configurations land within 0.0022 ROC-AUC of each other, so model choice matters little on this dataset. Dropping six add-on service columns (`logreg_reduced_features`) cost only 0.0016 ROC-AUC against the baseline, which suggests most of the signal sits in the remaining features. Gradient boosting has much lower recall because sklearn's `GradientBoostingClassifier` has no `class_weight` option, so it under-predicts the minority (churn) class at the default 0.5 threshold.
+| Run | What varies | Val ROC-AUC | Val F1 | Val Recall |
+|---|---|---|---|---|
+| gradient_boosting_lr005 | Model type | **0.8514** | 0.5891 | 0.5084 |
+| logreg_baseline | Baseline | 0.8483 | 0.6331 | 0.7993 |
+| logreg_strong_regularization | Hyperparameter (C = 0.05) | 0.8475 | 0.6345 | 0.7926 |
+| random_forest_200 | Model type | 0.8474 | 0.6387 | 0.7893 |
+| logreg_reduced_features | Feature set (9 of 15 categorical) | 0.8473 | 0.6298 | 0.7993 |
+
+**Final evaluation.** The selected model (`gradient_boosting_lr005`) is evaluated once on the held-out test set, which was not used for training or selection:
+
+| ROC-AUC | F1 | Precision | Recall | Accuracy |
+|---|---|---|---|---|
+| 0.8401 | 0.5688 | 0.6643 | 0.4973 | 0.7999 |
+
+The test ROC-AUC (0.8401) is below the validation score (0.8514). That's expected: a model chosen *because* it scored highest on validation tends to have an optimistic validation score, so the test score is the reliable estimate. Gradient boosting ranks churn risk best, but its test recall (0.4973) is just below the 0.50 threshold, because sklearn's `GradientBoostingClassifier` has no `class_weight` option and flags fewer churners at the default 0.5 decision threshold. The five configurations fall within 0.0041 validation ROC-AUC of each other, so model choice matters little on this dataset.
 
 **MLflow tracking UI** — all runs are logged to the `telco-churn` MLflow experiment:
 
-![MLflow runs table for the telco-churn experiment, showing the five named experiment runs with their metrics](docs/mlflow_runs.png)
+![MLflow runs table for the telco-churn experiment, showing the five experiment runs with their validation metrics](docs/mlflow_runs.png)
 
-The table shows the five configurations from `configs/experiments.yaml` (plus two single `train.py` runs), each with its logged metrics. `random_forest_200` has the highest ROC-AUC (0.8419), matching the result from `compare_experiments.py`.
+The table shows the five configurations from `configs/experiments.yaml`, each with its validation metrics. `gradient_boosting_lr005` has the highest validation ROC-AUC (0.8514) and is the only run with test metrics, because the test set is used once, for the selected model.
 ## Tests
 
 ```bash

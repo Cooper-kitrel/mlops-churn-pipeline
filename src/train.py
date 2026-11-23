@@ -61,6 +61,19 @@ def split_data(X, y, config: dict):
     )
 
 
+def split_train_val(X_train, y_train, config: dict):
+    """Split the training data again: part for fitting, part for validation.
+
+    Model selection uses the validation set, so the test set stays untouched.
+    """
+    return train_test_split(
+        X_train, y_train,
+        test_size=config["data"]["val_size"],
+        random_state=config["project"]["random_state"],
+        stratify=y_train,
+    )
+
+
 def flatten_params(config: dict) -> dict:
     """Flatten the config sections we want logged as MLflow params."""
     params = {"model.type": config["model"]["type"]}
@@ -69,6 +82,7 @@ def flatten_params(config: dict) -> dict:
     for k, v in config["preprocessing"].items():
         params[f"preprocessing.{k}"] = v
     params["data.test_size"] = config["data"]["test_size"]
+    params["data.val_size"] = config["data"]["val_size"]
     params["random_state"] = config["project"]["random_state"]
     params["n_numeric_features"] = len(config["features"]["numeric"])
     params["n_categorical_features"] = len(config["features"]["categorical"])
@@ -79,7 +93,10 @@ def run_training(config: dict, run_name: str | None = None) -> tuple[dict, list[
     """Train, evaluate, and log one run. Returns (metrics, threshold_failures)."""
     df = load_raw_data(config)
     X, y = prepare_data(df, config)
-    X_train, X_test, y_train, y_test = split_data(X, y, config)
+    X_train_full, _X_test, y_train_full, _y_test = split_data(
+        X, y, config)  # test set held out
+    X_train, X_val, y_train, y_val = split_train_val(
+        X_train_full, y_train_full, config)
 
     mlflow.set_tracking_uri(config["mlflow"]["tracking_uri"])
     mlflow.set_experiment(config["mlflow"]["experiment_name"])
@@ -97,10 +114,11 @@ def run_training(config: dict, run_name: str | None = None) -> tuple[dict, list[
         model.fit(X_train, y_train)
 
         # 3. Evaluate
-        y_pred = model.predict(X_test)
-        y_proba = model.predict_proba(X_test)[:, 1]
-        metrics = compute_metrics(y_test, y_pred, y_proba)
-        mlflow.log_metrics(metrics)
+        y_pred = model.predict(X_val)
+        y_proba = model.predict_proba(X_val)[:, 1]
+        metrics = compute_metrics(y_val, y_pred, y_proba)
+        mlflow.log_metrics(
+            {f"val_{name}": value for name, value in metrics.items()})
 
         failures = check_thresholds(metrics, config["thresholds"])
         mlflow.set_tag("thresholds_passed", str(not failures))
