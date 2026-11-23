@@ -1,0 +1,71 @@
+# Central configuration for the churn pipeline.
+# Every script reads from this file -- nothing below is hardcoded in src/.
+
+project:
+  name: telco-churn
+  random_state: 42
+
+data:
+  raw_path: data/raw/telco_churn.csv
+  dvc_file: data/raw/telco_churn.csv.dvc
+  source_url: https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv
+  id_column: customerID
+  target: Churn
+  positive_label: "Yes"
+  test_size: 0.2
+
+features:
+  numeric:
+    - tenure
+    - MonthlyCharges
+    - TotalCharges
+    - SeniorCitizen
+  categorical:
+    - gender
+    - Partner
+    - Dependents
+    - PhoneService
+    - MultipleLines
+    - InternetService
+    - OnlineSecurity
+    - OnlineBackup
+    - DeviceProtection
+    - TechSupport
+    - StreamingTV
+    - StreamingMovies
+    - Contract
+    - PaperlessBilling
+    - PaymentMethod
+
+preprocessing:
+  numeric_impute_strategy: median
+  categorical_impute_strategy: most_frequent
+  scale_numeric: true
+
+model:
+  type: logistic_regression   # logistic_regression | random_forest | gradient_boosting
+  params:
+    C: 1.0
+    max_iter: 1000
+    class_weight: balanced
+
+mlflow:
+  tracking_uri: sqlite:///mlflow.db
+  experiment_name: telco-churn
+  primary_metric: roc_auc
+
+thresholds:
+  # train.py exits with code 1 if any of these are not met
+  roc_auc: 0.80
+  f1: 0.55
+  recall: 0.50
+
+output:
+  model_path: models/model.joblib
+  metrics_path: reports/metrics.json
+
+drift:
+  reference_path: data/raw/telco_churn.csv
+  report_dir: reports
+  drift_share_threshold: 0.15   # exit 1 if more than 15% of features drift (~3 of 19)
+  simulate_drift: true
