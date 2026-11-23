@@ -1,0 +1,10 @@
+pandas==2.3.3         
+numpy==2.2.6
+scikit-learn==1.9.1
+mlflow==3.18.0
+skops==0.16.0
+evidently==0.7.23
+PyYAML==6.0.4
+joblib==1.6.0
+dvc==3.67.1
+pytest==9.2.0
